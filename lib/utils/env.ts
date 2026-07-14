@@ -1,5 +1,11 @@
-function readEnv(name: string): string {
-  const value = process.env[name];
+/**
+ * Next.js инлайнит NEXT_PUBLIC_*-переменные в клиентский бандл только когда
+ * видит статическое обращение вида `process.env.NEXT_PUBLIC_X` — динамический
+ * доступ `process.env[name]` не заменяется на этапе сборки и в браузере
+ * возвращает undefined. Поэтому каждая переменная читается отдельным
+ * литеральным обращением, а не через общий геттер по имени.
+ */
+function requireEnv(value: string | undefined, name: string): string {
   if (!value || value.trim().length === 0) {
     throw new Error(`Отсутствует обязательная переменная окружения: ${name}`);
   }
@@ -7,23 +13,23 @@ function readEnv(name: string): string {
 }
 
 export function getPublicSupabaseUrl(): string {
-  return readEnv("NEXT_PUBLIC_SUPABASE_URL");
+  return requireEnv(process.env.NEXT_PUBLIC_SUPABASE_URL, "NEXT_PUBLIC_SUPABASE_URL");
 }
 
 export function getPublicSupabaseAnonKey(): string {
-  return readEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  return requireEnv(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, "NEXT_PUBLIC_SUPABASE_ANON_KEY");
 }
 
 export function getSupabaseServiceRoleKey(): string {
-  return readEnv("SUPABASE_SERVICE_ROLE_KEY");
+  return requireEnv(process.env.SUPABASE_SERVICE_ROLE_KEY, "SUPABASE_SERVICE_ROLE_KEY");
 }
 
 export function getTelegramBotToken(): string {
-  return readEnv("TELEGRAM_BOT_TOKEN");
+  return requireEnv(process.env.TELEGRAM_BOT_TOKEN, "TELEGRAM_BOT_TOKEN");
 }
 
 export function getTelegramChatId(): string {
-  return readEnv("TELEGRAM_CHAT_ID");
+  return requireEnv(process.env.TELEGRAM_CHAT_ID, "TELEGRAM_CHAT_ID");
 }
 
 export function getSiteUrl(): string {
