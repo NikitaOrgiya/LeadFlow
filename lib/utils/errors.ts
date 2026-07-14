@@ -3,9 +3,22 @@
  * технических деталей пользователю. Используйте вместе с понятным
  * сообщением, которое возвращается в ответе API.
  */
+function extractMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  return String(error);
+}
+
 export function logServerError(context: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[${context}]`, message);
+  console.error(`[${context}]`, extractMessage(error));
 }
 
 export const USER_ERROR_MESSAGES = {
