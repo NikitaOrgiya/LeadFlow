@@ -1,20 +1,25 @@
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SiteShell } from "@/components/layout/site-shell";
+import { LandingStateProvider } from "@/components/landing/landing-state";
+import { Hero } from "@/components/landing/hero";
+import { Services } from "@/components/landing/services";
+import { Benefits } from "@/components/landing/benefits";
+import { Process } from "@/components/landing/process";
+import { Calculator } from "@/components/landing/calculator";
+import { Faq } from "@/components/landing/faq";
+import { LeadForm } from "@/components/landing/lead-form";
 
 export default function HomePage() {
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <Card className="max-w-md">
-        <CardHeader>
-          <CardTitle>LeadFlow</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">
-            Каркас проекта настроен. Публичный интерфейс будет добавлен на следующем этапе.
-          </p>
-          <Button>Рассчитать стоимость</Button>
-        </CardContent>
-      </Card>
-    </main>
+    <SiteShell>
+      <LandingStateProvider>
+        <Hero />
+        <Services />
+        <Benefits />
+        <Process />
+        <Calculator />
+        <Faq />
+        <LeadForm />
+      </LandingStateProvider>
+    </SiteShell>
   );
 }
