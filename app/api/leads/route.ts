@@ -20,7 +20,11 @@ function badRequest(message: string) {
   return NextResponse.json({ success: false, error: message }, { status: 400 });
 }
 
-export async function POST(request: Request) {
+function serverError(message: string) {
+  return NextResponse.json({ success: false, error: message }, { status: 500 });
+}
+
+async function handleLeadSubmission(request: Request) {
   let body: unknown;
   try {
     body = await request.json();
@@ -49,7 +53,10 @@ export async function POST(request: Request) {
   // 4. Zod-валидация остальных полей.
   const parsed = leadApiPayloadSchema.safeParse(raw);
   if (!parsed.success) {
-    logServerError("api/leads:validation", parsed.error.issues.map((i) => i.message).join("; "));
+    logServerError(
+      "api/leads:validation_failed",
+      parsed.error.issues.map((i) => i.message).join("; ")
+    );
     return badRequest(USER_ERROR_MESSAGES.validation);
   }
 
@@ -67,21 +74,35 @@ export async function POST(request: Request) {
 
   const supabase = createAdminClient();
 
-  // 8. Найти id услуги в базе (для внешнего ключа); услуга может
-  // отсутствовать в базе, если seed ещё не применён — тогда сохраняем
-  // без service_id, но с человекочитаемым названием.
-  const { data: serviceRow } = await supabase
+  // 8. Найти услугу в базе (для внешнего ключа и проверки is_active).
+  // slug уже проверен Zod-схемой против списка известных услуг, поэтому
+  // "неизвестная услуга" на этом шаге невозможна — но услуга может быть
+  // отсутствовать в ещё не заполненной seed-данными базе (не ошибка,
+  // сохраняем без FK) или быть явно деактивирована администратором
+  // (ошибка, заявку не принимаем).
+  const { data: serviceRow, error: serviceLookupError } = await supabase
     .from("services")
-    .select("id")
+    .select("id, is_active")
     .eq("slug", payload.serviceSlug)
     .maybeSingle();
+
+  if (serviceLookupError) {
+    logServerError("api/leads:service_lookup_failed", serviceLookupError.message);
+    // Не блокируем заявку из-за сбоя чтения справочника — service_name уже
+    // известен из конфигурации, FK на services в этом случае просто не
+    // проставляется.
+  }
+
+  if (serviceRow && serviceRow.is_active === false) {
+    return badRequest("Эта услуга временно недоступна. Выберите другую или свяжитесь с нами.");
+  }
 
   // 9. Сгенерировать публичный номер заявки атомарно в базе.
   const { data: leadNumber, error: numberError } = await supabase.rpc("generate_lead_number");
 
   if (numberError || !leadNumber) {
-    logServerError("api/leads:generate_lead_number", numberError);
-    return NextResponse.json({ success: false, error: USER_ERROR_MESSAGES.generic }, { status: 500 });
+    logServerError("api/leads:number_generation_failed", numberError);
+    return serverError(USER_ERROR_MESSAGES.generic);
   }
 
   // 10. Сохранить заявку.
@@ -102,8 +123,8 @@ export async function POST(request: Request) {
   });
 
   if (insertError) {
-    logServerError("api/leads:insert", insertError.message);
-    return NextResponse.json({ success: false, error: USER_ERROR_MESSAGES.generic }, { status: 500 });
+    logServerError("api/leads:insert_failed", insertError.message, leadNumber);
+    return serverError(USER_ERROR_MESSAGES.generic);
   }
 
   // 11. Уведомление в Telegram — ошибка здесь не должна приводить к потере
@@ -122,7 +143,7 @@ export async function POST(request: Request) {
   });
 
   if (!notification.success) {
-    logServerError("api/leads:telegram", "Уведомление не отправлено, заявка сохранена");
+    logServerError("api/leads:telegram_failed", "Уведомление не отправлено, заявка сохранена", leadNumber);
   }
 
   // 12. Безопасный JSON-ответ.
@@ -132,4 +153,16 @@ export async function POST(request: Request) {
     estimatedMin: estimate.min,
     estimatedMax: estimate.max,
   });
+}
+
+export async function POST(request: Request) {
+  try {
+    return await handleLeadSubmission(request);
+  } catch (error) {
+    // Любая непредвиденная ошибка (например, недоступность Supabase на
+    // сетевом уровне) не должна возвращать пользователю технические
+    // детали — только безопасный JSON-ответ с понятным сообщением.
+    logServerError("api/leads:unexpected", error);
+    return serverError(USER_ERROR_MESSAGES.generic);
+  }
 }

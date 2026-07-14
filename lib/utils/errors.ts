@@ -17,8 +17,16 @@ function extractMessage(error: unknown): string {
   return String(error);
 }
 
-export function logServerError(context: string, error: unknown) {
-  console.error(`[${context}]`, extractMessage(error));
+/**
+ * @param context   Название события, например "api/leads:insert_failed".
+ * @param error     Исходная ошибка — в лог попадёт только безопасное сообщение.
+ * @param leadNumber Публичный номер заявки, если она уже создана к моменту ошибки.
+ */
+export function logServerError(context: string, error: unknown, leadNumber?: string) {
+  const parts = [`[${context}]`, extractMessage(error)];
+  if (leadNumber) parts.push(`lead=${leadNumber}`);
+  parts.push(`at=${new Date().toISOString()}`);
+  console.error(...parts);
 }
 
 export const USER_ERROR_MESSAGES = {

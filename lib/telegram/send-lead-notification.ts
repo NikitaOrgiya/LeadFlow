@@ -19,6 +19,7 @@ export type LeadNotificationInput = {
 
 const MAX_MESSAGE_LENGTH = 3500;
 const MAX_COMMENT_LENGTH = 800;
+const TELEGRAM_REQUEST_TIMEOUT_MS = 5000;
 
 function buildMessage(lead: LeadNotificationInput): string {
   const lines = [
@@ -87,6 +88,9 @@ export async function sendLeadTelegramNotification(
         text,
         disable_web_page_preview: true,
       }),
+      // Не даём зависшему Telegram API держать ответ /api/leads бесконечно —
+      // заявка к этому моменту уже сохранена, дальше это best-effort попытка.
+      signal: AbortSignal.timeout(TELEGRAM_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
