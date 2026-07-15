@@ -133,9 +133,10 @@ lib/
   utils/                    — env, телефон, валюта, дата, статусы, ошибки/логи
 types/database.ts           — типы таблиц Supabase
 supabase/
-  migrations/                — SQL-миграции (enum, таблицы, RLS, функции, hardening)
+  migrations/                — SQL-миграции (enum, таблицы, RLS, функции, hardening, права)
   seed.sql                   — начальные данные по услугам
   make_admin.sql              — шаблон назначения роли admin
+  tests/table_privileges.sql  — read-only проверка табличных прав и RLS
 tests/
   unit/                      — Vitest: расчёт цены, телефон, Zod-схема
   e2e/                        — Playwright-тесты
@@ -166,7 +167,7 @@ npm run dev
 
 ## Применение SQL-миграций
 
-Файлы лежат в `supabase/migrations/` в порядке применения (`0001` → `0005`).
+Файлы лежат в `supabase/migrations/` в порядке применения (`0001` → `0006`).
 
 **Вариант A — через Supabase CLI:**
 
@@ -176,9 +177,38 @@ npx supabase link --project-ref <your-project-ref>
 npx supabase db push
 ```
 
-**Вариант B — вручную:** откройте **SQL Editor** в Supabase Dashboard и выполните содержимое файлов по порядку: `0001_init.sql`, `0002_lead_numbering.sql`, `0003_admin_check.sql`, `0004_rls.sql`, `0005_security_hardening.sql`, затем `supabase/seed.sql` (шесть услуг: `landing`, `corporate-site`, `telegram-bot`, `mini-crm`, `automation`, `ai-assistant`).
+**Вариант B — вручную:** откройте **SQL Editor** в Supabase Dashboard и выполните содержимое файлов по порядку: `0001_init.sql`, `0002_lead_numbering.sql`, `0003_admin_check.sql`, `0004_rls.sql`, `0005_security_hardening.sql`, `0006_fix_table_privileges.sql`, затем `supabase/seed.sql` (шесть услуг: `landing`, `corporate-site`, `telegram-bot`, `mini-crm`, `automation`, `ai-assistant`).
 
-`0005_security_hardening.sql` — самостоятельная миграция, не изменяющая уже применённые файлы: включает RLS на технической таблице счётчиков заявок, отзывает лишние права на SQL-функциях и пересоздаёт административные RLS-политики с явным `TO authenticated`. Если у вас уже развёрнут проект с миграциями `0001-0004`, достаточно применить только `0005`.
+`0005_security_hardening.sql` и `0006_fix_table_privileges.sql` — самостоятельные миграции, не изменяющие уже применённые файлы. Если у вас уже развёрнут проект с миграциями `0001-0004`, достаточно применить `0005` и `0006`.
+
+- `0005` включает RLS на технической таблице счётчиков заявок, отзывает лишние права на SQL-функциях и пересоздаёт административные RLS-политики с явным `TO authenticated`.
+- `0006` выдаёт **минимальные табличные права** (`GRANT SELECT`/`UPDATE`), без которых RLS-политики из `0004`/`0005` не работают: PostgreSQL сначала проверяет табличные права роли (`information_schema.role_table_grants`) и только потом применяет RLS. Без явного `GRANT` роль `authenticated` не может обратиться к таблице вообще, даже если политика разрешила бы нужные строки — именно это на практике проявлялось как «дашборд не читает `profiles`/`leads`». `0006` не отключает RLS и не расширяет доступ сверх `SELECT`/`UPDATE`, `anon` по-прежнему не имеет доступа к `leads`/`profiles`.
+
+### Проверка табличных прав и RLS
+
+После применения миграций выполните `supabase/tests/table_privileges.sql` в SQL Editor (файл ничего не меняет, только читает системные каталоги) — либо оба запроса по отдельности:
+
+```sql
+-- Табличные права: ожидаются ровно эти строки
+-- services | anon          | SELECT
+-- services | authenticated | SELECT
+-- profiles | authenticated | SELECT
+-- leads    | authenticated | SELECT
+-- leads    | authenticated | UPDATE
+select table_name, grantee, privilege_type
+from information_schema.role_table_grants
+where table_schema = 'public'
+  and table_name in ('services', 'leads', 'profiles')
+  and grantee in ('anon', 'authenticated')
+order by table_name, grantee, privilege_type;
+
+-- RLS: у всех четырёх таблиц rls_enabled должен быть true
+select relname as table_name, relrowsecurity as rls_enabled
+from pg_class
+where relnamespace = 'public'::regnamespace
+  and relname in ('services', 'leads', 'profiles', 'lead_number_counters')
+order by relname;
+```
 
 ## Создание администратора
 
@@ -282,14 +312,15 @@ npm run test:e2e
 - Стоимость (`estimatedMin`/`estimatedMax` и все опции) пересчитывается сервером в `POST /api/leads`; клиентские значения в базу не записываются.
 - Административный доступ защищён Supabase Auth + проверкой роли `admin` через таблицу `profiles` (`requireAdmin()` на каждой защищённой странице, `proxy.ts` обновляет сессию).
 - Row Level Security включён на `services`, `leads`, `profiles` **и** на технической таблице `lead_number_counters` — прямого доступа `anon`/`authenticated` к счётчику нет.
+- Табличные права (`GRANT`) выданы отдельно от RLS и минимально необходимы (`0006_fix_table_privileges.sql`): `services` — `SELECT` для `anon`/`authenticated`; `profiles` — `SELECT` только для `authenticated`; `leads` — `SELECT`/`UPDATE` только для `authenticated`. RLS остаётся единственным ограничителем видимых строк — `GRANT` лишь делает эти политики технически достижимыми (PostgreSQL проверяет табличные права раньше RLS).
 - SQL-функции `generate_lead_number()` и `is_admin()` — `SECURITY DEFINER` с `search_path = ''` и полностью квалифицированными именами таблиц; `EXECUTE` явно отозван у `PUBLIC`/`anon` и выдан только тем ролям, которым он нужен (`service_role`, и `authenticated` — только для `is_admin()`).
 - Административные RLS-политики явно указывают `TO authenticated`, чтобы анонимные запросы не пытались вызвать `is_admin()` и не падали с ошибкой прав.
-- Серверные ошибки логируются без секретов, паролей и stack trace (`lib/utils/errors.ts::logServerError`) — в лог попадают только название события, безопасное сообщение, номер заявки (если уже создана) и время.
+- Серверные ошибки логируются без секретов, паролей и stack trace (`lib/utils/errors.ts::logServerError`) — в лог попадают только название события, безопасные поля ошибки Supabase (`code`, `message`, `details`, `hint` — без API-ключей и токенов), номер/id заявки, если уже известны, и время. Пустая или нераспознанная ошибка логируется как `Unknown Supabase error`, а не пустой строкой.
 - Ошибка отправки в Telegram не приводит к потере уже сохранённой заявки; запрос ограничен таймаутом 5 секунд.
 
 ## Проверка безопасности
 
-Ручные проверки, которые стоит выполнить после применения `0005_security_hardening.sql` к вашему Supabase-проекту (замените `<anon-key>`/`<url>` на свои значения):
+Ручные проверки, которые стоит выполнить после применения `0005_security_hardening.sql` и `0006_fix_table_privileges.sql` к вашему Supabase-проекту (замените `<anon-key>`/`<url>` на свои значения):
 
 ```bash
 # anon не читает заявки (должен вернуться пустой список/403, а не данные)
@@ -306,9 +337,16 @@ curl "https://<project>.supabase.co/rest/v1/lead_number_counters?select=*" \
   -H "apikey: <anon-key>" -H "Authorization: Bearer <anon-key>"
 ```
 
-Дополнительно вручную в браузере/Supabase Dashboard:
+Дополнительно вручную в браузере/Supabase Dashboard, после применения миграций (включая `0006`):
 
+- анонимный посетитель видит услуги на главной странице (`services_public_read_active`, плюс `GRANT SELECT` из `0006`);
+- анонимный посетитель не читает `profiles` напрямую (например, через `/rest/v1/profiles` с anon-ключом — пустой список/ошибка прав);
+- анонимный посетитель не читает `leads` напрямую;
 - пользователь без роли `admin` в `profiles` не открывает `/admin` (редирект на `/admin/login?error=forbidden`);
+- пользователь с ролью `admin` открывает `/admin` и видит дашборд без ошибок в серверном логе;
+- администратор видит список заявок на `/admin/leads`;
+- администратор меняет статус заявки на карточке `/admin/leads/[id]`;
+- после обновления страницы (F5) новый статус сохранён — то есть запись реально прошла через `leads_admin_update`, а не только оптимистично обновилась в интерфейсе;
 - обычный `authenticated`-пользователь не читает чужие заявки и не назначает себе роль `admin` (нет публичной политики `UPDATE`/`INSERT` на `profiles`);
 - в `Project Settings → Database → Roles` / `Database Linter` Supabase не должно быть предупреждений вида «RLS disabled» или «function has no search_path» для таблиц/функций этого проекта;
 - в собранном клиентском бандле (`npm run build`, затем поиск по `.next/static`) отсутствуют строки `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN` и их значения.
@@ -328,7 +366,7 @@ npm run start
 2. Добавьте переменные окружения из `.env.example` в **Project Settings → Environment Variables** (для Production и Preview).
 3. `NEXT_PUBLIC_SITE_URL` укажите как реальный домен деплоя.
 4. Запустите деплой — команда сборки по умолчанию (`next build`) не требует изменений.
-5. Примените SQL-миграции (включая `0005_security_hardening.sql`) к продакшн-проекту Supabase и назначьте администратора до первого входа в `/admin`.
+5. Примените SQL-миграции (включая `0005_security_hardening.sql` и `0006_fix_table_privileges.sql`) к продакшн-проекту Supabase и назначьте администратора до первого входа в `/admin`.
 
 ## Известные ограничения
 
