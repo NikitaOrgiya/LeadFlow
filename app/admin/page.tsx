@@ -26,7 +26,7 @@ export default async function AdminDashboardPage() {
 
   for (const result of [newResult, inProgressResult, completedResult, last7DaysResult]) {
     if (result.error) {
-      logServerError("admin/dashboard", result.error.message);
+      logServerError("admin/dashboard", result.error);
     }
   }
 

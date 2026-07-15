@@ -3,28 +3,71 @@
  * технических деталей пользователю. Используйте вместе с понятным
  * сообщением, которое возвращается в ответе API.
  */
-function extractMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (
+
+type PostgrestErrorShape = {
+  message?: unknown;
+  code?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+function isPostgrestErrorShape(error: unknown): error is PostgrestErrorShape {
+  return (
     typeof error === "object" &&
     error !== null &&
-    "message" in error &&
-    typeof (error as { message: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  return String(error);
+    ("code" in error || "details" in error || "hint" in error || "message" in error)
+  );
+}
+
+function safeString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**
- * @param context   Название события, например "api/leads:insert_failed".
- * @param error     Исходная ошибка — в лог попадёт только безопасное сообщение.
- * @param leadNumber Публичный номер заявки, если она уже создана к моменту ошибки.
+ * Достаёт из Supabase/PostgREST-ошибки только безопасные для лога поля:
+ * code, message, details, hint. Никогда не выводит ключи, токены, пароли
+ * или содержимое запроса — только эти четыре строковых поля объекта ошибки.
+ * Если ни одного непустого поля нет, возвращает нейтральную строку вместо
+ * пустого лога.
  */
-export function logServerError(context: string, error: unknown, leadNumber?: string) {
-  const parts = [`[${context}]`, extractMessage(error)];
-  if (leadNumber) parts.push(`lead=${leadNumber}`);
+function formatError(error: unknown): string {
+  if (isPostgrestErrorShape(error)) {
+    const code = safeString(error.code);
+    const message = safeString(error.message);
+    const details = safeString(error.details);
+    const hint = safeString(error.hint);
+
+    const parts: string[] = [];
+    if (code) parts.push(`code=${code}`);
+    if (message) parts.push(`message="${message}"`);
+    if (details) parts.push(`details="${details}"`);
+    if (hint) parts.push(`hint="${hint}"`);
+
+    if (parts.length > 0) return parts.join(" ");
+  }
+
+  if (error instanceof Error) {
+    return error.message.trim().length > 0 ? error.message : "Unknown Supabase error";
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+
+  return "Unknown Supabase error";
+}
+
+/**
+ * @param context Название события, например "api/leads:insert_failed".
+ * @param error   Исходная ошибка (Error, PostgrestError или произвольное
+ *                значение) — в лог попадут только безопасные поля.
+ * @param leadRef Публичный номер заявки или её id, если она уже известна
+ *                к моменту ошибки — помогает найти заявку в базе по логу.
+ */
+export function logServerError(context: string, error: unknown, leadRef?: string) {
+  const parts = [`[${context}]`, formatError(error)];
+  if (leadRef) parts.push(`lead=${leadRef}`);
   parts.push(`at=${new Date().toISOString()}`);
   console.error(...parts);
 }

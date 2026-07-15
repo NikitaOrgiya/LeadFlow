@@ -28,7 +28,7 @@ export async function updateLeadStatus(
   const { error } = await supabase.from("leads").update({ status }).eq("id", leadId);
 
   if (error) {
-    logServerError("actions/updateLeadStatus", error.message);
+    logServerError("actions/updateLeadStatus:update_failed", error, leadId);
     return { success: false, error: "Не удалось обновить статус. Попробуйте ещё раз." };
   }
 

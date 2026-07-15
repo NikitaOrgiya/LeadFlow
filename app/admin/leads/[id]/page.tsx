@@ -3,9 +3,11 @@ import Link from "next/link";
 
 import { AdminShell } from "@/components/admin/admin-shell";
 import { LeadDetails } from "@/components/admin/lead-details";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createClient } from "@/lib/supabase/server";
+import { logServerError } from "@/lib/utils/errors";
 
 export const metadata: Metadata = {
   title: "Карточка заявки",
@@ -20,11 +22,19 @@ export default async function AdminLeadDetailPage({ params }: LeadDetailPageProp
   const { id } = await params;
 
   const supabase = await createClient();
-  const { data: lead } = await supabase.from("leads").select("*").eq("id", id).maybeSingle();
+  const { data: lead, error } = await supabase.from("leads").select("*").eq("id", id).maybeSingle();
+
+  if (error) {
+    logServerError("admin/leads/[id]:query_failed", error);
+  }
 
   return (
     <AdminShell email={session.email}>
-      {lead ? (
+      {error ? (
+        <Alert variant="destructive">
+          <AlertDescription>Не удалось загрузить данные. Попробуйте обновить страницу.</AlertDescription>
+        </Alert>
+      ) : lead ? (
         <LeadDetails lead={lead} />
       ) : (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">

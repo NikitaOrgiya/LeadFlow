@@ -80,7 +80,7 @@ export default async function AdminLeadsPage({ searchParams }: LeadsPageProps) {
     .range(from, to);
 
   if (error) {
-    logServerError("admin/leads", error.message);
+    logServerError("admin/leads:query_failed", error);
   }
 
   const hasFilters = Boolean(sanitizedQuery || status || service);
